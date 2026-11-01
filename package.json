@@ -1,0 +1,19 @@
+{
+  "name": "load-balancer-node",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "server": "node server/index.js",
+    "servers": "node scripts/start-servers.js",
+    "balancer": "node balancer/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "js-yaml": "^5.5.0",
+    "systeminformation": "^5.33.19"
+  }
+}
