@@ -2,7 +2,7 @@
 
 balancer:
   port: 8080
-  algorithm: weighted_round_robin   # round_robin | weighted_round_robin
+  algorithm: round_robin            # round_robin | weighted_round_robin
   metrics_interval_ms: 5000         # how often metrics are polled
   metrics_timeout_ms: 4000          # /metrics takes ~1-3 s on Windows
   health_interval_ms: 2000          # how often /health is checked
