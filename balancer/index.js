@@ -4,6 +4,7 @@ const { createRegistry } = require('./registry');
 const { createAlgorithm } = require('./algorithms');
 const { forward } = require('./proxy');
 const { startHealthChecks } = require('./health');
+const { startMetricsPolling } = require('./metrics');
 
 let config;
 try {
@@ -36,6 +37,10 @@ function handleStatus(res) {
       failures: s.failures,
       lastError: s.lastError,
       ...s.stats,
+      criteria: registry.criteria(s),
+      efficiency: registry.efficiency(s),
+      metricsUpdatedAt: s.metrics ? s.metrics.updatedAt : null,
+      metricsError: s.metricsError,
     })),
   });
 }
@@ -51,6 +56,7 @@ async function handleProxy(req, res) {
 
   target.stats.requests++;
   target.stats.active++;
+  const start = Date.now();
 
   try {
     const { statusCode, durationMs } = await forward(
@@ -59,9 +65,12 @@ async function handleProxy(req, res) {
       target,
       config.balancer.request_timeout_ms
     );
+    // A 5xx answer means the server failed, even though it responded
+    registry.recordResult(target, durationMs, statusCode < 500);
     console.log(`#${reqId} ${req.method} ${req.url} -> ${target.id} ${statusCode} (${durationMs} ms)`);
   } catch (err) {
     target.stats.errors++;
+    registry.recordResult(target, Date.now() - start, false);
     console.log(`#${reqId} ${req.method} ${req.url} -> ${target.id} ERROR: ${err.code || err.message}`);
 
     if (!res.headersSent) {
@@ -88,5 +97,10 @@ server.listen(config.balancer.port, () => {
   startHealthChecks(registry, {
     intervalMs: config.balancer.health_interval_ms,
     timeoutMs: config.balancer.health_timeout_ms,
+  });
+
+  startMetricsPolling(registry, {
+    intervalMs: config.balancer.metrics_interval_ms,
+    timeoutMs: config.balancer.metrics_timeout_ms,
   });
 });
