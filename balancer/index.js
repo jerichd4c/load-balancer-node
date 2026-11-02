@@ -3,6 +3,7 @@ const { loadConfig } = require('./config');
 const { createRegistry } = require('./registry');
 const { createAlgorithm } = require('./algorithms');
 const { forward } = require('./proxy');
+const { startHealthChecks } = require('./health');
 
 let config;
 try {
@@ -12,7 +13,7 @@ try {
   process.exit(1);
 }
 
-const registry = createRegistry(config.servers);
+const registry = createRegistry(config.servers, config.balancer.failures_to_down);
 const algorithm = createAlgorithm(config.balancer.algorithm);
 
 let requestCount = 0;
@@ -32,6 +33,8 @@ function handleStatus(res) {
       id: s.id,
       url: s.url,
       status: s.status,
+      failures: s.failures,
+      lastError: s.lastError,
       ...s.stats,
     })),
   });
@@ -81,4 +84,9 @@ server.listen(config.balancer.port, () => {
   console.log(`Balanceador escuchando en http://localhost:${config.balancer.port}`);
   console.log(`Algoritmo: ${algorithm.name}`);
   for (const s of registry.all()) console.log(`  - ${s.id} -> ${s.url}`);
+
+  startHealthChecks(registry, {
+    intervalMs: config.balancer.health_interval_ms,
+    timeoutMs: config.balancer.health_timeout_ms,
+  });
 });
