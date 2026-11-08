@@ -5,6 +5,7 @@ const { createAlgorithm } = require('./algorithms');
 const { forward } = require('./proxy');
 const { startHealthChecks } = require('./health');
 const { startMetricsPolling } = require('./metrics');
+const { computeScores } = require('./score');
 
 let config;
 try {
@@ -15,7 +16,10 @@ try {
 }
 
 const registry = createRegistry(config.servers, config.balancer.failures_to_down);
-const algorithm = createAlgorithm(config.balancer.algorithm);
+const algorithm = createAlgorithm(config.balancer.algorithm, {
+  weights: config.weights,
+  criteriaOf: registry.criteria,
+});
 
 let requestCount = 0;
 
@@ -24,9 +28,31 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body, null, 2));
 }
 
+// Rounds to 3 decimals, so /lb/status is easier to read
+const round = (n) => Number(n.toFixed(3));
+
+// Score of each available server and the share of traffic it should get
+// with weighted_round_robin. DOWN servers have no score
+function scoreSummary() {
+  const scored = computeScores(registry.available(), config.weights, registry.criteria);
+  const total = scored.reduce((sum, s) => sum + s.score, 0);
+  const summary = new Map();
+
+  for (const { server, score, parts } of scored) {
+    summary.set(server.id, {
+      score: round(score),
+      expectedShare: `${Math.round((score / total) * 100)}%`,
+      parts: Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, round(value)])),
+    });
+  }
+  return summary;
+}
+
 // Balancer status. It lives under /lb/ so it doesn't
 // clash with the servers' own routes
 function handleStatus(res) {
+  const scores = scoreSummary();
+
   sendJson(res, 200, {
     algorithm: algorithm.name,
     totalRequests: requestCount,
@@ -41,6 +67,7 @@ function handleStatus(res) {
       efficiency: registry.efficiency(s),
       metricsUpdatedAt: s.metrics ? s.metrics.updatedAt : null,
       metricsError: s.metricsError,
+      scoring: scores.get(s.id) || null,
     })),
   });
 }
