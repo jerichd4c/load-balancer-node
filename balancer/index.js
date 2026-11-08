@@ -72,15 +72,20 @@ function handleStatus(res) {
   });
 }
 
-async function handleProxy(req, res) {
-  const reqId = ++requestCount;
-  const target = algorithm.pick(registry.available());
+// Reads the whole request body. It has to be kept in memory because
+// a stream can only be read once, and a retry needs to send it again
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
 
-  if (!target) {
-    console.log(`#${reqId} ${req.method} ${req.url} -> sin servidores disponibles`);
-    return sendJson(res, 503, { error: 'No hay servidores disponibles' });
-  }
-
+// Sends the request to one server and updates its stats.
+// Returns null if it worked, or the error if it failed
+async function tryServer(req, res, target, body, label) {
   target.stats.requests++;
   target.stats.active++;
   const start = Date.now();
@@ -90,25 +95,68 @@ async function handleProxy(req, res) {
       req,
       res,
       target,
-      config.balancer.request_timeout_ms
+      config.balancer.request_timeout_ms,
+      body
     );
     // A 5xx answer means the server failed, even though it responded
     registry.recordResult(target, durationMs, statusCode < 500);
-    console.log(`#${reqId} ${req.method} ${req.url} -> ${target.id} ${statusCode} (${durationMs} ms)`);
+    console.log(`${label} -> ${target.id} ${statusCode} (${durationMs} ms)`);
+    return null;
   } catch (err) {
     target.stats.errors++;
     registry.recordResult(target, Date.now() - start, false);
-    console.log(`#${reqId} ${req.method} ${req.url} -> ${target.id} ERROR: ${err.code || err.message}`);
-
-    if (!res.headersSent) {
-      const status = err.code === 'ETIMEDOUT' ? 504 : 502;
-      sendJson(res, status, { error: `Falló el servidor ${target.id}`, detail: err.code || err.message });
-    } else {
-      res.destroy();
-    }
+    console.log(`${label} -> ${target.id} ERROR: ${err.code || err.message}`);
+    return err;
   } finally {
     target.stats.active--;
   }
+}
+
+async function handleProxy(req, res) {
+  const reqId = ++requestCount;
+  const label = `#${reqId} ${req.method} ${req.url}`;
+
+  let body;
+  try {
+    body = await readBody(req);
+  } catch {
+    // The client closed the connection before sending everything
+    return;
+  }
+
+  // First attempt + retries, each one on a server that hasn't been tried yet
+  const maxAttempts = 1 + config.balancer.max_retries;
+  const tried = [];
+  let lastError = null;
+
+  while (tried.length < maxAttempts) {
+    const candidates = registry.available().filter((s) => !tried.includes(s));
+    const target = algorithm.pick(candidates);
+    if (!target) break;
+    tried.push(target);
+
+    const attemptLabel = tried.length > 1 ? `${label} [reintento ${tried.length - 1}]` : label;
+    lastError = await tryServer(req, res, target, body, attemptLabel);
+    if (!lastError) return;
+
+    // If the server had already started answering, part of the response
+    // reached the client and the request can't be retried anymore
+    if (res.headersSent) return res.destroy();
+  }
+
+  // No server was available from the start
+  if (tried.length === 0) {
+    console.log(`${label} -> sin servidores disponibles`);
+    return sendJson(res, 503, { error: 'No hay servidores disponibles' });
+  }
+
+  // Every attempt failed
+  const status = lastError.code === 'ETIMEDOUT' ? 504 : 502;
+  sendJson(res, status, {
+    error: 'Fallaron todos los intentos',
+    tried: tried.map((s) => s.id),
+    detail: lastError.code || lastError.message,
+  });
 }
 
 const server = http.createServer((req, res) => {

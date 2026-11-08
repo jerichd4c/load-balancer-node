@@ -3,7 +3,8 @@ const http = require('http');
 // Forwards the client's request to the `target` server and copies the
 // response back to the client. Returns a promise that resolves when the
 // response finishes, or rejects if the server fails.
-function forward(req, res, target, timeoutMs) {
+// `body` is the request body, already read, so it can be sent again on a retry
+function forward(req, res, target, timeoutMs, body) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
 
@@ -42,8 +43,7 @@ function forward(req, res, target, timeoutMs) {
 
     proxyReq.on('error', reject);
 
-    // The request body (if any) is passed through to the server as is
-    req.pipe(proxyReq);
+    proxyReq.end(body);
   });
 }
 
