@@ -6,7 +6,8 @@
   "scripts": {
     "server": "node server/index.js",
     "servers": "node scripts/start-servers.js",
-    "balancer": "node balancer/index.js"
+    "balancer": "node balancer/index.js",
+    "load": "node scripts/load-test.js"
   },
   "keywords": [],
   "author": "",
